@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { exigirInventario } from "@/lib/sesion";
 import { plazoMercadillo } from "@/lib/ajustes";
 import { fecha } from "@/lib/textos";
+import SinInventario from "@/components/SinInventario";
 
 export default async function Inicio() {
   await exigirInventario();
@@ -16,6 +17,13 @@ export default async function Inicio() {
     plazoMercadillo(),
   ]);
   const pct = total ? Math.round((decididos / total) * 100) : 0;
+  if (!total)
+    return (
+      <>
+        <h1>Mudanza de la oficina</h1>
+        <SinInventario />
+      </>
+    );
   return (
     <>
       <h1>Mudanza de la oficina</h1>

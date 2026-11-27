@@ -2,6 +2,7 @@ import Link from "next/link";
 import { db } from "@/lib/db";
 import { exigirInventario } from "@/lib/sesion";
 import { Miniatura } from "@/components/Tarjeta";
+import SinInventario from "@/components/SinInventario";
 
 export default async function Salas() {
   await exigirInventario();
@@ -15,6 +16,7 @@ export default async function Salas() {
   return (
     <>
       <h1>Salas de la oficina actual</h1>
+      {!salas.length && <SinInventario />}
       {plantas.map((p) => (
         <section key={p}>
           <h2>{p}</h2>

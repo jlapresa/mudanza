@@ -4,6 +4,7 @@ import { leerFiltros, whereFiltros, ORDEN_ARTICULOS } from "@/lib/articulos";
 import { incluirTarjeta, zonasActivas } from "@/lib/consultas";
 import Filtros from "@/components/Filtros";
 import ListaConFicha from "@/components/ListaConFicha";
+import SinInventario from "@/components/SinInventario";
 
 const PAGINA = 48;
 
@@ -23,6 +24,7 @@ export default async function Articulos({ searchParams }: { searchParams: Promis
   return (
     <>
       <h1>{titulo}</h1>
+      {!(await db.articulo.count()) && <SinInventario />}
       <Filtros f={f} zonas={await zonasActivas()} accion="/articulos" />
       <ListaConFicha articulos={articulos} base="/articulos" params={qs} abierto={sp.a} u={u} mostrarSala total={total} mas={mas} />
     </>
