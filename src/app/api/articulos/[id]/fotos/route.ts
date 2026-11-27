@@ -17,7 +17,7 @@ export const POST = manejar(async (req, { params }) => {
   const r = await unaVez(req.headers.get("x-operacion"), async () => {
     const entrada = Buffer.from(await foto.arrayBuffer());
     // El navegador ya la comprime; aquí se garantiza el tamaño y se normaliza a JPEG.
-    let grande: Buffer, mini: Buffer, meta: sharp.OutputInfo;
+    let grande: Buffer, mini: Buffer, meta: { width: number; height: number };
     try {
       const g = await sharp(entrada).rotate().resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer({ resolveWithObject: true });
       grande = g.data;
