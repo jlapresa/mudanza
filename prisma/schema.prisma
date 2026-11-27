@@ -1,0 +1,205 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+enum Rol {
+  responsable
+  colaborador
+  equipo
+}
+
+enum Categoria {
+  silla
+  mesa
+  armario
+  estanteria
+  sofa
+  electronica
+  decoracion
+  otros
+}
+
+enum Estado {
+  bueno
+  aceptable
+  deteriorado
+}
+
+enum Decision {
+  pendiente
+  llevar
+  no_llevar
+}
+
+enum Salida {
+  ofrecer_equipo
+  vender
+  donar
+  reciclar
+  dejar_en_local
+  devolver
+}
+
+enum EstadoPeticion {
+  abierta
+  asignada
+  rechazada
+  retirada
+  recogida
+}
+
+model Usuario {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  nombre    String
+  rol       Rol      @default(equipo)
+  creadoEn  DateTime @default(now())
+
+  peticiones Peticion[]
+  eventos    Evento[]
+  avisos     Aviso[]
+  decididos  Articulo[] @relation("decididoPor")
+  fotos      Foto[]
+}
+
+model SalaOrigen {
+  id        String     @id @default(cuid())
+  nombre    String
+  planta    String
+  orden     Int
+  notas     String?
+  articulos Articulo[]
+
+  @@unique([planta, nombre])
+}
+
+model ZonaDestino {
+  id        String     @id @default(cuid())
+  nombre    String     @unique
+  orden     Int
+  activa    Boolean    @default(true)
+  articulos Articulo[]
+}
+
+model Articulo {
+  id                String     @id @default(cuid())
+  codigo            String     @unique
+  nombre            String
+  descripcion       String?
+  categoria         Categoria  @default(otros)
+  cantidad          Int        @default(1)
+  medidas           String?
+  estado            Estado?
+  salaOrigenId      String
+  salaOrigen        SalaOrigen @relation(fields: [salaOrigenId], references: [id])
+  posicion          Int
+  origenClave       String?    @unique
+  padreId           String?
+  padre             Articulo?  @relation("division", fields: [padreId], references: [id])
+  partes            Articulo[] @relation("division")
+  decision          Decision   @default(pendiente)
+  zonaDestinoId     String?
+  zonaDestino       ZonaDestino? @relation(fields: [zonaDestinoId], references: [id])
+  salida            Salida?
+  notasDecision     String?
+  decididoPorId     String?
+  decididoPor       Usuario?   @relation("decididoPor", fields: [decididoPorId], references: [id])
+  decididoEn        DateTime?
+  camposOriginales  Json?
+  creadoEn          DateTime   @default(now())
+  actualizadoEn     DateTime   @updatedAt
+
+  fotos      Foto[]
+  peticiones Peticion[]
+  eventos    Evento[]
+
+  @@index([salaOrigenId, posicion])
+  @@index([decision])
+}
+
+model Foto {
+  id          String   @id @default(cuid())
+  articuloId  String
+  articulo    Articulo @relation(fields: [articuloId], references: [id], onDelete: Cascade)
+  clave       String
+  claveMini   String
+  principal   Boolean  @default(false)
+  ancho       Int?
+  alto        Int?
+  subidaPorId String?
+  subidaPor   Usuario? @relation(fields: [subidaPorId], references: [id])
+  creadaEn    DateTime @default(now())
+}
+
+model Peticion {
+  id             String         @id @default(cuid())
+  articuloId     String
+  articulo       Articulo       @relation(fields: [articuloId], references: [id], onDelete: Cascade)
+  usuarioId      String
+  usuario        Usuario        @relation(fields: [usuarioId], references: [id])
+  cantidad       Int            @default(1)
+  comentario     String?
+  estado         EstadoPeticion @default(abierta)
+  recogidaLimite DateTime?
+  creadaEn       DateTime       @default(now())
+  cambiadaEn     DateTime       @default(now())
+
+  @@index([articuloId, estado])
+}
+
+model Evento {
+  id            String    @id @default(cuid())
+  usuarioId     String?
+  usuario       Usuario?  @relation(fields: [usuarioId], references: [id])
+  articuloId    String?
+  articulo      Articulo? @relation(fields: [articuloId], references: [id], onDelete: SetNull)
+  tipo          String
+  campo         String?
+  valorAnterior String?
+  valorNuevo    String?
+  creadoEn      DateTime  @default(now())
+
+  @@index([articuloId, creadoEn])
+}
+
+model Aviso {
+  id        String   @id @default(cuid())
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id])
+  texto     String
+  enlace    String?
+  leido     Boolean  @default(false)
+  creadoEn  DateTime @default(now())
+
+  @@index([usuarioId, leido])
+}
+
+model Ajuste {
+  clave String @id
+  valor String
+}
+
+// Operaciones enviadas desde la cola sin conexión: evita aplicarlas dos veces.
+model OperacionCliente {
+  id       String   @id
+  creadaEn DateTime @default(now())
+}
+
+// Códigos de acceso de un solo uso enviados al correo corporativo.
+model CodigoAcceso {
+  id       String   @id @default(cuid())
+  email    String
+  hash     String
+  expira   DateTime
+  intentos Int      @default(0)
+  usado    Boolean  @default(false)
+  creadoEn DateTime @default(now())
+
+  @@index([email, creadoEn])
+}
