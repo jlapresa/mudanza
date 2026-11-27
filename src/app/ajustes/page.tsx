@@ -1,10 +1,14 @@
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import Copiar from "@/components/Copiar";
+import { darAcceso, emailPermitido, enlaceEquipo, nuevoToken, regenerarEnlaceEquipo } from "@/lib/acceso";
+import { urlBase } from "@/lib/avisos";
 import { db } from "@/lib/db";
 import { exigirResponsablePagina, usuarioActual, esResponsable } from "@/lib/sesion";
 import { leerAjuste, guardarAjuste } from "@/lib/ajustes";
 import { registrar } from "@/lib/historial";
-import { ROL } from "@/lib/textos";
+import { ROL, fecha } from "@/lib/textos";
 import type { Rol } from "@prisma/client";
 
 async function soloResponsable() {
@@ -20,7 +24,10 @@ const aLocal = (iso: string) => {
   return s.slice(0, 16).replace(" ", "T");
 };
 
-export default async function Ajustes() {
+export default async function Ajustes({ searchParams }: { searchParams: Promise<{ malas?: string }> }) {
+  const { malas } = await searchParams;
+  const base = urlBase();
+  const equipo = await enlaceEquipo();
   const yo = await exigirResponsablePagina();
   const [zonas, usuarios, apertura, cierre, recogida] = await Promise.all([
     db.zonaDestino.findMany({ orderBy: { orden: "asc" }, include: { _count: { select: { articulos: true } } } }),
@@ -75,15 +82,39 @@ export default async function Ajustes() {
     await registrar(db, { usuarioId: u.id, tipo: "ajuste", campo: "rol", antes: `${antes.email}: ${antes.rol}`, despues: `${antes.email}: ${rol}` });
     revalidatePath("/ajustes");
   }
-  async function invitar(fd: FormData) {
+  async function nuevoEnlace(fd: FormData) {
     "use server";
     const u = await soloResponsable();
-    const email = String(fd.get("email") ?? "").trim().toLowerCase();
+    const id = String(fd.get("id"));
+    if (id === u.id) return; // el propio enlace se cambia desde «Tu cuenta»
+    const p = await db.usuario.update({ where: { id }, data: { tokenAcceso: nuevoToken() } });
+    await registrar(db, { usuarioId: u.id, tipo: "ajuste", campo: "enlace", despues: `enlace nuevo para ${p.email}` });
+    revalidatePath("/ajustes");
+  }
+  async function alta(fd: FormData) {
+    "use server";
+    const u = await soloResponsable();
     const rol = String(fd.get("rol")) as Rol;
-    const dominio = (process.env.DOMINIO_PERMITIDO ?? "quum.com").toLowerCase();
-    if (!email.endsWith("@" + dominio)) return;
-    await db.usuario.upsert({ where: { email }, create: { email, nombre: email.split("@")[0], rol }, update: { rol } });
-    await registrar(db, { usuarioId: u.id, tipo: "ajuste", campo: "rol", despues: `${email}: ${rol}` });
+    // Una persona por línea: «Nombre Apellido; correo@quum.com» o solo el correo.
+    const lineas = String(fd.get("personas") ?? "").split(/\n/).map((l) => l.trim()).filter(Boolean);
+    const malas: string[] = [];
+    for (const l of lineas) {
+      const email = l.match(/[^\s;,<>]+@[^\s;,<>]+/)?.[0]?.toLowerCase();
+      if (!email || !emailPermitido(email)) { malas.push(l); continue; }
+      const nombre = l.replace(email, "").replace(/[;,<>]/g, " ").replace(/\s+/g, " ").trim();
+      await darAcceso(email, nombre, rol);
+      await registrar(db, { usuarioId: u.id, tipo: "ajuste", campo: "rol", despues: `${email}: ${rol}` });
+    }
+    revalidatePath("/ajustes");
+    if (malas.length) redirect(`/ajustes?malas=${encodeURIComponent(malas.join(" · "))}#personas`);
+    redirect("/ajustes#personas");
+  }
+  async function enlaceDelEquipo(fd: FormData) {
+    "use server";
+    const u = await soloResponsable();
+    if (fd.get("accion") === "desactivar") await guardarAjuste("enlace_equipo_activo", "no");
+    else await regenerarEnlaceEquipo();
+    await registrar(db, { usuarioId: u.id, tipo: "ajuste", campo: "enlace del equipo", despues: String(fd.get("accion")) });
     revalidatePath("/ajustes");
   }
 
@@ -100,7 +131,7 @@ export default async function Ajustes() {
           <div className="campo" style={{ width: 160 }}><label htmlFor="recogida">Días para recoger</label><input id="recogida" name="recogida" type="number" min={1} defaultValue={recogida} /></div>
         </div>
         <button className="primario">Guardar plazo</button>
-        <p className="sutil">El correo de apertura sale al abrir y el recordatorio, dos días antes del cierre.</p>
+        <p className="sutil">El día que abre, todo el mundo recibe un aviso en la app, y otro dos días antes del cierre.</p>
       </form>
 
       <h2>Zonas de destino</h2>
@@ -128,30 +159,57 @@ export default async function Ajustes() {
         <button>Añadir zona</button>
       </form>
 
-      <h2>Personas y roles</h2>
-      <p className="sutil">Quien entra por primera vez tiene rol de equipo. Aquí se asigna el de responsable o colaborador.</p>
+      <h2 id="enlace-equipo">Enlace del equipo</h2>
+      <p className="sutil">Un único enlace para todo el personal. Quien lo abre se registra con su nombre y su correo de Quum y entra con rol de equipo: ve el mercadillo y pide. Compártelo en el canal general de Teams.</p>
+      {equipo ? (
+        <div className="fila">
+          <Copiar texto={`${base}/equipo/${equipo}`} clase="primario" />
+          <form action={enlaceDelEquipo}><input type="hidden" name="accion" value="nuevo" /><button>Cambiar enlace</button></form>
+          <form action={enlaceDelEquipo}><input type="hidden" name="accion" value="desactivar" /><button className="peligro">Desactivar</button></form>
+        </div>
+      ) : (
+        <form action={enlaceDelEquipo}><input type="hidden" name="accion" value="nuevo" /><button className="primario">Crear enlace del equipo</button></form>
+      )}
+
+      <h2 id="personas">Personas y enlaces personales</h2>
+      <p className="sutil">Cada persona entra con su enlace personal. Copia el de cada una y envíaselo por Teams. Si alguien lo pierde o lo comparte, crea uno nuevo: el anterior deja de valer.</p>
+      {malas && <p className="error" role="alert">No se han dado de alta estas líneas porque no llevan un correo de Quum: {malas}</p>}
       <ul className="lista">
         {usuarios.map((us) => (
           <li key={us.id}>
-            <form action={cambiarRol} className="fila" style={{ justifyContent: "space-between" }}>
-              <span>{us.nombre} <span className="sutil">· {us.email}</span></span>
-              <input type="hidden" name="id" value={us.id} />
-              <span className="fila">
-                <select name="rol" defaultValue={us.rol} aria-label={`Rol de ${us.nombre}`} disabled={us.id === yo.id} style={{ width: 160 }}>
-                  {Object.entries(ROL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                </select>
-                {us.id !== yo.id && <button>Cambiar</button>}
+            <div className="fila" style={{ justifyContent: "space-between" }}>
+              <span>
+                {us.nombre} <span className="sutil">· {us.email}{us.ultimoAcceso ? ` · entró el ${fecha(us.ultimoAcceso, true)}` : " · aún no ha entrado"}</span>
               </span>
-            </form>
+              <span className="fila">
+                <form action={cambiarRol} className="fila">
+                  <input type="hidden" name="id" value={us.id} />
+                  <select name="rol" defaultValue={us.rol} aria-label={`Rol de ${us.nombre}`} disabled={us.id === yo.id} style={{ width: 150 }}>
+                    {Object.entries(ROL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                  {us.id !== yo.id && <button>Cambiar rol</button>}
+                </form>
+                {us.tokenAcceso && <Copiar texto={`${base}/acceso/${us.tokenAcceso}`} />}
+                {us.id !== yo.id && (
+                  <form action={nuevoEnlace}><input type="hidden" name="id" value={us.id} /><button aria-label={`Enlace nuevo para ${us.nombre}`}>{us.tokenAcceso ? "Enlace nuevo" : "Crear enlace"}</button></form>
+                )}
+              </span>
+            </div>
           </li>
         ))}
       </ul>
-      <form action={invitar} className="fila" style={{ marginTop: 8 }}>
-        <input name="email" type="email" placeholder="nombre@quum.com" aria-label="Correo" style={{ flex: 1, minWidth: 200 }} required />
-        <select name="rol" defaultValue="colaborador" aria-label="Rol" style={{ width: 160 }}>
-          {Object.entries(ROL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-        <button>Dar acceso</button>
+      <h3>Dar de alta</h3>
+      <form action={alta}>
+        <div className="campo">
+          <label htmlFor="personas-alta">Una persona por línea: nombre y correo de Quum</label>
+          <textarea id="personas-alta" name="personas" rows={4} placeholder={"Ana Pérez; ana.perez@quum.com\nLuis Gómez; luis.gomez@quum.com"} required />
+        </div>
+        <div className="fila">
+          <select name="rol" defaultValue="colaborador" aria-label="Rol" style={{ width: 180 }}>
+            {Object.entries(ROL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <button className="primario">Dar de alta</button>
+        </div>
       </form>
     </div>
   );

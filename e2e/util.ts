@@ -8,7 +8,7 @@ export async function entrar(page: Page, email: string, nombre: string, rol: "re
   await page.fill("#p-email", email);
   await page.fill("#p-nombre", nombre);
   await page.selectOption("#p-rol", rol);
-  await page.getByRole("button", { name: "Entrar sin código" }).click();
+  await page.getByRole("button", { name: "Entrar sin enlace" }).click();
   await page.waitForURL((u) => !u.pathname.startsWith("/entrar"));
 }
 

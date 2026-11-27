@@ -60,12 +60,17 @@ model Usuario {
   nombre    String
   rol       Rol      @default(equipo)
   creadoEn  DateTime @default(now())
+  // Enlace personal de acceso (/acceso/<token>). Cambiarlo cierra las sesiones abiertas.
+  tokenAcceso  String?
+  ultimoAcceso DateTime?
 
   peticiones Peticion[]
   eventos    Evento[]
   avisos     Aviso[]
   decididos  Articulo[] @relation("decididoPor")
   fotos      Foto[]
+
+  @@index([tokenAcceso])
 }
 
 model SalaOrigen {
@@ -191,7 +196,7 @@ model OperacionCliente {
   creadaEn DateTime @default(now())
 }
 
-// Códigos de acceso de un solo uso enviados al correo corporativo.
+// Sin uso desde que el acceso es por enlace. Se conserva para no borrar datos al aplicar el esquema.
 model CodigoAcceso {
   id       String   @id @default(cuid())
   email    String

@@ -1,12 +1,10 @@
 import { db } from "./db";
 import { registrar } from "./historial";
 import { ErrorApi, type Usuario } from "./sesion";
-import { avisar } from "./avisos";
+import { avisar, avisarATodos } from "./avisos";
 import { plazoMercadillo } from "./ajustes";
-import { correosEquipo, enviarCorreo } from "./correo";
 import { fecha } from "./textos";
 import { leerAjuste, guardarAjuste } from "./ajustes";
-import { urlBase } from "./avisos";
 
 export const enMercadillo = { decision: "no_llevar" as const, salida: "ofrecer_equipo" as const };
 
@@ -92,15 +90,9 @@ export async function asignar(u: Usuario, articuloId: string, peticionId?: strin
   });
 
   for (const p of asignadas)
-    await avisar(p.usuarioId, `«${a.nombre}» es para ti. Recógelo antes del ${fecha(limite)}.`, "/mis-peticiones", {
-      asunto: `Mudanza Quum: «${a.nombre}» es para ti`,
-      cuerpo: `Hola, ${p.usuario.nombre}.\n\nTe hemos asignado «${a.nombre}» (${a.codigo}). Tienes hasta el ${fecha(limite)} para recogerlo.`,
-    });
+    await avisar(p.usuarioId, `«${a.nombre}» es para ti. Recógelo antes del ${fecha(limite)}.`, "/mis-peticiones");
   for (const p of restantes)
-    await avisar(p.usuarioId, `«${a.nombre}» se ha asignado a otra persona que lo pidió antes.`, "/mis-peticiones", {
-      asunto: `Mudanza Quum: «${a.nombre}» ya tiene dueño`,
-      cuerpo: `Hola, ${p.usuario.nombre}.\n\n«${a.nombre}» se ha asignado a otra persona que lo pidió antes que tú. Échale un vistazo al resto del mercadillo.`,
-    });
+    await avisar(p.usuarioId, `«${a.nombre}» se ha asignado a otra persona que lo pidió antes.`, "/mis-peticiones");
   return { asignadas: asignadas.length, rechazadas: restantes.length };
 }
 
@@ -113,31 +105,22 @@ export async function marcarRecogida(u: Usuario, peticionId: string) {
   });
 }
 
-/** Correos programados: apertura y recordatorio dos días antes del cierre. Idempotente. */
+/** Avisos programados: apertura del mercadillo y recordatorio dos días antes del cierre. Idempotente. */
 export async function tareasProgramadas(ahora = new Date()) {
   const plazo = await plazoMercadillo();
   const hechos: string[] = [];
-  const url = urlBase() + "/mercadillo";
-  if (ahora >= plazo.apertura && ahora <= plazo.cierre && !(await leerAjuste("correo_apertura"))) {
+  if (ahora >= plazo.apertura && ahora <= plazo.cierre && !(await leerAjuste("aviso_apertura"))) {
     const n = await db.articulo.count({ where: enMercadillo });
-    await enviarCorreo(
-      await correosEquipo(),
-      "Mudanza Quum: abre el mercadillo interno",
-      `Ya está abierto el mercadillo con los muebles que no nos llevamos a la oficina nueva. Hay ${n} artículos. Si algo te interesa, pídelo antes del ${fecha(plazo.cierre)}. Se asignan por orden de llegada.\n\n${url}`,
-    );
-    await guardarAjuste("correo_apertura", ahora.toISOString());
+    await avisarATodos(`Abre el mercadillo: ${n} artículos que no nos llevamos. Pide lo que quieras antes del ${fecha(plazo.cierre)}; se asigna por orden de llegada.`, "/mercadillo");
+    await guardarAjuste("aviso_apertura", ahora.toISOString());
     hechos.push("apertura");
   }
   // Dos días antes del cierre, desde las 00:00 de ese día en Madrid (la tarea diaria corre por la mañana).
   const diaCierre = plazo.cierre.toLocaleDateString("sv-SE", { timeZone: "Europe/Madrid" });
   const recordatorio = new Date(new Date(`${diaCierre}T00:00:00+01:00`).getTime() - 2 * 86400_000);
-  if (ahora >= recordatorio && ahora <= plazo.cierre && !(await leerAjuste("correo_recordatorio"))) {
-    await enviarCorreo(
-      await correosEquipo(),
-      "Mudanza Quum: quedan dos días de mercadillo",
-      `El mercadillo cierra el ${fecha(plazo.cierre)}. Si quieres algo, pídelo antes.\n\n${url}`,
-    );
-    await guardarAjuste("correo_recordatorio", ahora.toISOString());
+  if (ahora >= recordatorio && ahora <= plazo.cierre && !(await leerAjuste("aviso_recordatorio"))) {
+    await avisarATodos(`Quedan dos días de mercadillo: cierra el ${fecha(plazo.cierre)}.`, "/mercadillo");
+    await guardarAjuste("aviso_recordatorio", ahora.toISOString());
     hechos.push("recordatorio");
   }
   return hechos;

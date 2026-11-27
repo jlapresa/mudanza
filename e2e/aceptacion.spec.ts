@@ -1,7 +1,7 @@
 // Criterios de aceptación del punto 13 de los requisitos.
 import { test } from "@playwright/test";
 import { execSync } from "child_process";
-import { writeFileSync, readFileSync } from "fs";
+import { writeFileSync } from "fs";
 import path from "path";
 import sharp from "sharp";
 import jsQR from "jsqr";
@@ -132,8 +132,6 @@ test("4 y 5. El equipo ve solo el mercadillo; tres piden lo mismo, se asigna por
   const avisos = await db.aviso.findMany({ where: { usuario: { email: { in: personas.map((p) => p[0]) } } }, include: { usuario: true } });
   expect(avisos.find((a) => a.usuario.nombre === "Ana")?.texto).toContain("es para ti");
   expect(avisos.filter((a) => a.texto.includes("otra persona")).map((a) => a.usuario.nombre).sort()).toEqual(["Luis", "Marta"]);
-  const correos = await db.evento.findMany({ where: { tipo: "correo_simulado" } });
-  expect(correos.length).toBeGreaterThanOrEqual(3);
 
   // Ana entra y ve el aviso y su petición asignada.
   const { ctx, page: ana } = await nuevaSesion(browser, "ana@quum.com", "Ana", "equipo");
@@ -245,48 +243,104 @@ test("El mercadillo no admite peticiones fuera de plazo", async ({ page }) => {
   await expect(page.getByRole("button", { name: /Lo quiero/ })).toHaveCount(0);
 });
 
-test("Solo entran cuentas del dominio de Quum", async ({ page }) => {
-  await page.goto("/entrar");
-  await page.fill("#email", "alguien@gmail.com");
-  await page.getByRole("button", { name: "Enviarme el código" }).click();
-  await expect(page.getByText("Usa tu correo de Quum")).toBeVisible();
+test("Sin enlace no se entra", async ({ page }) => {
   await page.goto("/salas");
   await expect(page).toHaveURL(/entrar/);
+  await expect(page.getByText("necesitas tu enlace personal")).toBeVisible();
+  await page.goto("/acceso/un-enlace-que-no-existe-0000000");
+  await expect(page.getByText("Este enlace no es válido")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Entrar" })).toHaveCount(0);
 });
 
-test("Registro con el correo corporativo y código de un solo uso", async ({ page, context }) => {
-  const buzon = path.join(__dirname, "..", "test-results", `correos-${process.env.E2E_DB}`, "correos.jsonl");
-  const ultimoCodigo = () => {
-    const lineas = readFileSync(buzon, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    const m = lineas.filter((c) => c.para[0] === "nueva.persona@quum.com").pop();
-    return m.asunto.match(/(\d{6})/)[1] as string;
-  };
-  await page.goto("/entrar");
-  await page.fill("#email", "Nueva.Persona@quum.com");
-  await page.fill("#nombre", "Nueva Persona");
-  await page.getByRole("button", { name: "Enviarme el código" }).click();
-  await expect(page.getByText("Te hemos enviado un código a nueva.persona@quum.com")).toBeVisible();
-  const codigo = ultimoCodigo();
+test("Acceso por enlace: primera entrada, enlace del equipo y enlaces personales", async ({ browser }) => {
+  const movil = () => browser.newContext({ viewport: { width: 412, height: 915 }, isMobile: true, hasTouch: true });
 
-  await page.fill("#codigo", codigo === "000000" ? "111111" : "000000");
-  await page.getByRole("button", { name: "Entrar", exact: true }).click();
-  await expect(page.getByText("El código no es correcto o ha caducado.")).toBeVisible();
+  // 1. La responsable entra con el enlace inicial, que deja de valer al usarlo.
+  const cJefa = await movil();
+  const jefa = await cJefa.newPage();
+  await jefa.goto("/acceso/enlace-inicial-de-prueba-0123456789");
+  await jefa.getByRole("button", { name: "Entrar" }).click();
+  await expect(jefa).toHaveURL(/\/$/);
+  await expect(jefa.getByRole("heading", { name: "Mudanza de la oficina" })).toBeVisible();
+  const yo = await db.usuario.findUniqueOrThrow({ where: { email: "jefa@quum.com" } });
+  expect(yo.rol).toBe("responsable");
+  expect(yo.tokenAcceso).toBeTruthy();
+  const cOtra = await movil();
+  const otra = await cOtra.newPage();
+  await otra.goto("/acceso/enlace-inicial-de-prueba-0123456789");
+  await expect(otra.getByText("Este enlace no es válido")).toBeVisible();
 
-  await page.fill("#codigo", codigo);
-  await page.getByRole("button", { name: "Entrar", exact: true }).click();
-  await expect(page).toHaveURL(/\/mercadillo$/);
-  const u = await db.usuario.findUniqueOrThrow({ where: { email: "nueva.persona@quum.com" } });
-  expect([u.nombre, u.rol]).toEqual(["Nueva Persona", "equipo"]);
+  // 2. Crea el enlace del equipo; alguien se registra con él y entra como equipo.
+  await jefa.goto("/ajustes");
+  await jefa.getByRole("button", { name: "Crear enlace del equipo" }).click();
+  await expect(jefa.getByRole("button", { name: "Desactivar" })).toBeVisible();
+  const enlaceEquipo = (await db.ajuste.findUniqueOrThrow({ where: { clave: "enlace_equipo" } })).valor;
+  await otra.goto(`/equipo/${enlaceEquipo}`);
+  await otra.fill("#nombre", "Eva Ruiz");
+  await otra.fill("#email", "eva@gmail.com");
+  await otra.getByRole("button", { name: "Entrar" }).click();
+  await expect(otra.getByText("Usa tu correo de Quum")).toBeVisible();
+  await otra.fill("#email", "eva.ruiz@quum.com");
+  await otra.getByRole("button", { name: "Entrar" }).click();
+  await expect(otra).toHaveURL(/\/mercadillo$/);
+  const eva = await db.usuario.findUniqueOrThrow({ where: { email: "eva.ruiz@quum.com" } });
+  expect([eva.nombre, eva.rol]).toEqual(["Eva Ruiz", "equipo"]);
+  await otra.goto("/cuenta");
+  await expect(otra.getByRole("button", { name: "Copiar enlace" })).toBeVisible();
+  // Nadie puede volver a registrarse con un correo que ya existe.
+  const cIntruso = await movil();
+  const intruso = await cIntruso.newPage();
+  await intruso.goto(`/equipo/${enlaceEquipo}`);
+  await intruso.fill("#nombre", "Otra Persona");
+  await intruso.fill("#email", "eva.ruiz@quum.com");
+  await intruso.getByRole("button", { name: "Entrar" }).click();
+  await expect(intruso.getByText("Ya hay una cuenta con ese correo")).toBeVisible();
 
-  // El mismo código no vale dos veces.
-  await context.clearCookies();
-  await page.goto(`/entrar?paso=codigo&email=nueva.persona@quum.com`);
-  await page.fill("#codigo", codigo);
-  await page.getByRole("button", { name: "Entrar", exact: true }).click();
-  await expect(page.getByText("El código no es correcto o ha caducado.")).toBeVisible();
-  expect(await db.codigoAcceso.count({ where: { email: "nueva.persona@quum.com" } })).toBe(1);
-  const guardado = await db.codigoAcceso.findFirstOrThrow({ where: { email: "nueva.persona@quum.com" } });
-  expect(guardado.hash).not.toContain(codigo); // el código no se guarda en claro
+  // 3. Alta de un colaborador con enlace personal.
+  await jefa.goto("/ajustes");
+  await jefa.fill("#personas-alta", "Pablo Díaz; pablo.diaz@quum.com\nalguien@gmail.com");
+  await jefa.getByRole("button", { name: "Dar de alta" }).click();
+  await expect(jefa.getByText("No se han dado de alta estas líneas")).toBeVisible();
+  const pablo = await db.usuario.findUniqueOrThrow({ where: { email: "pablo.diaz@quum.com" } });
+  expect([pablo.nombre, pablo.rol]).toEqual(["Pablo Díaz", "colaborador"]);
+  const cPablo = await movil();
+  const pPablo = await cPablo.newPage();
+  await pPablo.goto(`/acceso/${pablo.tokenAcceso}`);
+  await expect(pPablo.getByText("Hola, Pablo")).toBeVisible();
+  await pPablo.getByRole("button", { name: "Entrar" }).click();
+  await expect(pPablo.getByRole("heading", { name: "Mudanza de la oficina" })).toBeVisible();
+
+  // 4. Un enlace nuevo invalida el anterior y cierra la sesión abierta.
+  await jefa.getByRole("button", { name: "Enlace nuevo para Pablo Díaz" }).click();
+  await expect.poll(async () => (await db.usuario.findUniqueOrThrow({ where: { id: pablo.id } })).tokenAcceso).not.toBe(pablo.tokenAcceso);
+  await pPablo.goto("/salas");
+  await expect(pPablo).toHaveURL(/entrar/);
+  await pPablo.goto(`/acceso/${pablo.tokenAcceso}`);
+  await expect(pPablo.getByText("Este enlace no es válido")).toBeVisible();
+
+  // 5. Desactivar el enlace del equipo.
+  await jefa.goto("/ajustes");
+  await jefa.getByRole("button", { name: "Desactivar" }).click();
+  await expect(jefa.getByRole("button", { name: "Crear enlace del equipo" })).toBeVisible();
+  await intruso.goto(`/equipo/${enlaceEquipo}`);
+  await expect(intruso.getByText("Este enlace ya no es válido")).toBeVisible();
+  for (const c of [cJefa, cOtra, cIntruso, cPablo]) await c.close();
+});
+
+test("Avisos de apertura y recordatorio del mercadillo, una sola vez", async ({ page }) => {
+  await entrar(page, "javier@quum.com", "Javier", "responsable");
+  await db.ajuste.deleteMany({ where: { clave: { in: ["aviso_apertura", "aviso_recordatorio"] } } });
+  await abrirMercadillo(); // abierto, cierra en 5 días
+  const n = await db.usuario.count();
+  let r = await page.request.get("/api/cron", { headers: { authorization: "Bearer dev-cron" } });
+  expect((await r.json()).avisos).toEqual(["apertura"]);
+  expect(await db.aviso.count({ where: { texto: { startsWith: "Abre el mercadillo" } } })).toBe(n);
+  await db.ajuste.update({ where: { clave: "mercadillo_cierre" }, data: { valor: new Date(Date.now() + 36 * 3600_000).toISOString() } });
+  r = await page.request.get("/api/cron", { headers: { authorization: "Bearer dev-cron" } });
+  expect((await r.json()).avisos).toEqual(["recordatorio"]);
+  r = await page.request.get("/api/cron", { headers: { authorization: "Bearer dev-cron" } });
+  expect((await r.json()).avisos).toEqual([]);
+  expect((await page.request.get("/api/cron")).status()).toBe(401);
 });
 
 test.afterAll(async () => {

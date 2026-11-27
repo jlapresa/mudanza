@@ -23,8 +23,8 @@ export default defineConfig({
     env: {
       DATABASE_URL: DB,
       DATABASE_URL_UNPOOLED: DB,
-      E2E_CORREOS_DIR: `test-results/correos-${process.env.E2E_DB}`,
-      RESEND_API_KEY: "",
+      ACCESO_INICIAL: "enlace-inicial-de-prueba-0123456789",
+      RESPONSABLES: "jefa@quum.com",
       BLOB_READ_WRITE_TOKEN: "",
       APP_URL: "http://localhost:3100",
       ALMACEN_DIR: "./datos/fotos-test",
