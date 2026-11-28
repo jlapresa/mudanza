@@ -20,7 +20,7 @@ test("9. Tras importar, el número de líneas coincide con el archivo (112)", as
   expect(await db.articulo.count({ where: { decision: { not: "pendiente" } } })).toBe(0);
 });
 
-test("1. Recorro una sala en el móvil: foto y «Se lleva · Barrio fachada» sin volver a la lista", async ({ page }) => {
+test("1. Recorro una sala en el móvil: foto y «Se lleva · Barrio A» sin volver a la lista", async ({ page }) => {
   await entrar(page, "javier@quum.com", "Javier", "responsable");
   const sala = await db.salaOrigen.findFirstOrThrow({ where: { nombre: "Despacho creatividad" } });
   const articulos = await db.articulo.findMany({ where: { salaOrigenId: sala.id }, orderBy: { posicion: "asc" } });
@@ -33,15 +33,15 @@ test("1. Recorro una sala en el móvil: foto y «Se lleva · Barrio fachada» si
     await page.locator('input[type="file"]').setInputFiles(FOTO);
     await expect(page.locator('.foto-principal img[src^="/api/fotos/"]')).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Se lleva", exact: true }).click();
-    await page.getByRole("button", { name: "Barrio fachada" }).click();
-    await expect(page.getByText("Guardado: se lleva a Barrio fachada.")).toBeVisible();
+    await page.getByRole("button", { name: "Barrio A" }).click();
+    await expect(page.getByText("Guardado: se lleva a Barrio A.")).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/salas/${sala.id}\\?a=${articulos[i].codigo}$`)); // sin volver a la lista
     await page.getByRole("link", { name: "Siguiente →" }).click();
   }
   const hechos = await db.articulo.findMany({ where: { id: { in: articulos.slice(0, 3).map((a) => a.id) } }, include: { zonaDestino: true, fotos: true } });
   for (const a of hechos) {
     expect(a.decision).toBe("llevar");
-    expect(a.zonaDestino?.nombre).toBe("Barrio fachada");
+    expect(a.zonaDestino?.nombre).toBe("Barrio A");
     expect(a.fotos.length).toBe(1);
   }
   // La foto se ha reducido a 1600 px de lado largo y tiene miniatura.
@@ -78,8 +78,8 @@ test("3. Una línea de 6 unidades se divide en 4 que se llevan y 2 al mercadillo
   await expect(page.getByText(`Unidades separadas en ${a.codigo}-B`)).toBeVisible();
 
   await page.getByRole("button", { name: "Se lleva", exact: true }).click();
-  await page.getByRole("button", { name: "Comedor", exact: true }).click();
-  await expect(page.getByText("Guardado: se lleva a Comedor.")).toBeVisible();
+  await page.getByRole("button", { name: "Cocina - comedor", exact: true }).click();
+  await expect(page.getByText("Guardado: se lleva a Cocina - comedor.")).toBeVisible();
 
   await page.goto(`/a/${a.codigo}-B`);
   await expect(page.locator("#ficha-titulo")).toHaveText("Bancos comedor");
@@ -180,10 +180,10 @@ test("7. La lista para la mudanza en PDF agrupa por zona e incluye foto y códig
   const texto = execSync(`pdftotext -layout ${ruta} -`).toString();
   const llevar = await db.articulo.findMany({ where: { decision: "llevar" }, include: { zonaDestino: true } });
   for (const a of llevar) expect(texto).toContain(a.codigo);
-  expect(texto).toMatch(/Barrio fachada\s+·\s+\d+ unidades/);
-  expect(texto).toMatch(/Comedor\s+·\s+4 unidades/);
-  // Barrio fachada va antes que Comedor, como en el orden de zonas.
-  expect(texto.search(/Barrio fachada\s+·/)).toBeLessThan(texto.search(/Comedor\s+·/));
+  expect(texto).toMatch(/Barrio A\s+·\s+\d+ unidades/);
+  expect(texto).toMatch(/Cocina - comedor\s+·\s+4 unidades/);
+  // Barrio A va antes que Cocina - comedor, como en el orden de zonas.
+  expect(texto.search(/Barrio A\s+·/)).toBeLessThan(texto.search(/Cocina - comedor\s+·/));
   const imagenes = execSync(`pdfimages -list ${ruta} | tail -n +3 | wc -l`).toString().trim();
   expect(Number(imagenes)).toBeGreaterThanOrEqual(3); // las fotos subidas en la prueba 1
 
@@ -345,4 +345,31 @@ test("Avisos de apertura y recordatorio del mercadillo, una sola vez", async ({ 
 
 test.afterAll(async () => {
   await db.$disconnect();
+});
+
+test("Zonas: la nueva distribución sustituye a la anterior sin perder decisiones", async ({ page }) => {
+  // Simula una base con la distribución anterior y un mueble ya asignado a una zona antigua.
+  await db.ajuste.update({ where: { clave: "zonas_version" }, data: { valor: "1" } });
+  const vieja = await db.zonaDestino.create({ data: { nombre: "Biblioteca", orden: 50 } });
+  const vacia = await db.zonaDestino.create({ data: { nombre: "Lounge patio", orden: 51 } });
+  const a = await db.articulo.findUniqueOrThrow({ where: { codigo: "QM-0005" } });
+  await db.articulo.update({ where: { id: a.id }, data: { decision: "llevar", zonaDestinoId: vieja.id } });
+
+  // El servidor de pruebas ya aplicó la versión en memoria; la migración se comprueba directamente.
+  const { execSync } = await import("child_process");
+  execSync(`npx tsx -e "import('./src/lib/zonas').then(m=>(m.asegurarZonas ?? m.default.asegurarZonas)()).then(()=>process.exit(0))"`, {
+    env: { ...process.env, DATABASE_URL: `postgresql://postgres:postgres@localhost:5432/${process.env.E2E_DB}` },
+  });
+  const zonas = await db.zonaDestino.findMany({ where: { activa: true }, orderBy: { orden: "asc" } });
+  expect(zonas.map((z) => z.nombre)).toEqual([
+    "Entrada", "Sala de reuniones 1", "Grada", "Barrio A", "Sala de reuniones 2",
+    "Barrio B", "Administración", "Cocina - comedor", "Pasillo izquierdo", "Terraza",
+  ]);
+  expect(await db.zonaDestino.findUnique({ where: { id: vacia.id } })).toBeNull();
+  expect((await db.zonaDestino.findUniqueOrThrow({ where: { id: vieja.id } })).activa).toBe(false);
+  expect((await db.articulo.findUniqueOrThrow({ where: { id: a.id } })).zonaDestinoId).toBe(vieja.id);
+
+  await entrar(page, "javier@quum.com", "Javier", "responsable");
+  await page.goto("/destinos");
+  await expect(page.getByText("Esta zona ya no existe en la oficina nueva")).toBeVisible();
 });

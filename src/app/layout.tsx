@@ -5,6 +5,7 @@ import { usuarioActual, puedeEditar, esResponsable } from "@/lib/sesion";
 import { db } from "@/lib/db";
 import Menu from "@/components/Menu";
 import EstadoCola from "@/components/EstadoCola";
+import { asegurarZonas } from "@/lib/zonas";
 
 export const metadata: Metadata = {
   title: "Mudanza Quum",
@@ -16,6 +17,7 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, them
 
 export default async function Layout({ children }: { children: React.ReactNode }) {
   const u = await usuarioActual();
+  if (u) await asegurarZonas();
   const avisos = u ? await db.aviso.count({ where: { usuarioId: u.id, leido: false } }) : 0;
   const enlaces = !u
     ? []

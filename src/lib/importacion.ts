@@ -159,6 +159,7 @@ export async function guardarInventario(db: import("@prisma/client").PrismaClien
   const { ZONAS_INICIALES } = await import("./zonas");
   for (const [i, nombre] of ZONAS_INICIALES.entries())
     await db.zonaDestino.upsert({ where: { nombre }, create: { nombre, orden: i + 1 }, update: {} });
+  await db.ajuste.upsert({ where: { clave: "zonas_version" }, create: { clave: "zonas_version", valor: "2" }, update: {} });
 
   const { salas } = resumen(lineas);
   const salaIds = new Map<string, string>();

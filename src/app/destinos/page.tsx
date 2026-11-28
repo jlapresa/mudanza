@@ -25,7 +25,8 @@ export default async function Destinos() {
         for (const a of z.articulos) porCat.set(a.nombre, (porCat.get(a.nombre) ?? 0) + a.cantidad);
         return (
           <section key={z.id} id={`z-${z.id}`}>
-            <h2>{z.nombre} <span className="sutil">· {uds} {uds === 1 ? "unidad" : "unidades"}{!z.activa ? " · zona desactivada" : ""}</span></h2>
+            <h2>{z.nombre} <span className="sutil">· {uds} {uds === 1 ? "unidad" : "unidades"}{!z.activa ? " · zona de la distribución anterior" : ""}</span></h2>
+            {!z.activa && z.articulos.length > 0 && <p className="aviso-banda">Esta zona ya no existe en la oficina nueva. Abre cada mueble y elige su nueva zona.</p>}
             {!z.articulos.length ? <p className="sutil">Nada asignado todavía.</p> : (
               <div className="rejilla">
                 {z.articulos.map((a) => <Tarjeta key={a.codigo} a={a} href={`/a/${a.codigo}`} mostrarSala />)}
